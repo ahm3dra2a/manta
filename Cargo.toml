@@ -1,0 +1,13 @@
+[package]
+name = "manta"
+version = "0.1.0"
+edition = "2024"
+description = "An experimental BitTorrent v1 command-line client"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ahm3dra2a/Manta"
+
+[dependencies]
+anyhow = "1"
+ctrlc = "3"
+sha1 = "0.10"
+ureq = "2.12"
