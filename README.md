@@ -1,6 +1,8 @@
 # Manta
 
-Manta is an experimental BitTorrent v1 command-line client written in Rust.
+Manta is an experimental BitTorrent v1 client written in Rust. Its transfer
+engine is also exposed as a library, keeping it reusable by the CLI and the
+planned native Windows and Linux desktop applications.
 
 ## Build and run
 
@@ -19,6 +21,10 @@ pieces after the download is complete until stopped with Ctrl+C. Inbound
 connections are limited to 64 peers. Public reachability depends on the host
 firewall and network allowing connections to the selected peer port.
 
+During downloads, Manta connects to multiple tracker peers concurrently,
+requests multiple blocks per peer at a time, and prioritizes the least commonly
+available pieces among connected peers.
+
 Downloads support single- and multi-file torrents and do not overwrite
 existing output files. Verified pieces are kept in memory as progress state for
 the current run, but are not yet resumed after restarting Manta.
@@ -28,7 +34,7 @@ the current run, but are not yet resumed after restarting Manta.
 Manta currently supports `.torrent` files, BitTorrent v1, HTTP(S) trackers, and
 the TCP peer protocol. UDP trackers, magnet links, DHT, peer exchange, local
 peer discovery, µTP, webseeds, BitTorrent v2, persistent resume data, and
-parallel block requests are not implemented.
+multi-torrent management are not implemented.
 
 Manta is dual-licensed under MIT or Apache-2.0; see [LICENSE-MIT](LICENSE-MIT)
 and [LICENSE-APACHE](LICENSE-APACHE).

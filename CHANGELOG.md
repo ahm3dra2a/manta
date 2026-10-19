@@ -2,6 +2,22 @@
 
 All notable changes to Manta are documented here.
 
+## [0.2.0] - 2026-10-19
+
+### Added
+
+- Reusable Rust library surface for sharing the transfer engine across
+  frontends.
+- Concurrent connections to tracker peers, rarest-first piece scheduling, and
+  pipelined block requests.
+
+### Limitations
+
+- No persistent resume data, magnet links, UDP trackers, DHT, PEX, LPD, µTP,
+  webseeds, BitTorrent v2, or multi-torrent management.
+- The native Windows and Linux desktop frontends are planned, not yet
+  implemented.
+
 ## [0.1.0] - 2026-10-19
 
 ### Added

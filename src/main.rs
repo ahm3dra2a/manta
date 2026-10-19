@@ -1,10 +1,3 @@
-mod bencode;
-mod peer;
-mod server;
-mod storage;
-mod torrent;
-mod tracker;
-
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -14,6 +7,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use manta::{peer, server, storage, torrent, tracker};
 
 const DEFAULT_PEER_PORT: u16 = 51413;
 
@@ -195,33 +189,33 @@ fn download(path: &Path, destination: &Path, requested_port: u16) -> Result<()> 
         }
 
         println!("Tracker(s) returned {} peer(s)", announced.peers.len());
-        let have_todo = peer_state
-            .downloaded
-            .lock()
-            .map_err(|_| anyhow::anyhow!("piece availability lock was poisoned"))?
-            .clone();
-        let mut downloaded = have_todo;
+        let storage = Arc::clone(&peer_state.storage);
+        let downloaded_bytes = Arc::clone(&downloaded_bytes);
+        let save_piece = |index: usize, bytes: &[u8]| -> Result<()> {
+            storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("torrent storage lock was poisoned"))?
+                .write_piece(index, torrent.piece_length, bytes)?;
+            downloaded_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            Ok(())
+        };
         let newly_downloaded = peer::download(
             &torrent,
             &announced.peers,
             &peer_id,
-            &mut downloaded,
-            |index, bytes| {
-                peer_state
-                    .storage
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("torrent storage lock was poisoned"))?
-                    .write_piece(index, torrent.piece_length, bytes)?;
-                peer_state.mark_piece_available(index)?;
-                downloaded_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                Ok(())
-            },
+            &peer_state,
+            &save_piece,
         )?;
 
         if newly_downloaded == 0 {
             eprintln!("No new pieces downloaded this round.");
         }
-        let complete = downloaded.iter().all(|done| *done);
+        let complete = peer_state
+            .downloaded
+            .lock()
+            .map_err(|_| anyhow::anyhow!("piece availability lock was poisoned"))?
+            .iter()
+            .all(|done| *done);
         if !complete {
             let delay = announced.interval.max(Duration::from_secs(30));
             eprintln!(
