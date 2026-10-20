@@ -400,10 +400,7 @@ mod tests {
                 },
             ],
             piece_length: 3,
-            piece_hashes: vec![
-                Sha1::digest([1, 2, 3]).into(),
-                Sha1::digest([4, 5]).into(),
-            ],
+            piece_hashes: vec![Sha1::digest([1, 2, 3]).into(), Sha1::digest([4, 5]).into()],
             info_hash: [0; 20],
             announce_urls: Vec::new(),
             total_length: 5,
