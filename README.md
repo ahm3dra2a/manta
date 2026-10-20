@@ -25,15 +25,18 @@ During downloads, Manta connects to multiple tracker peers concurrently,
 requests multiple blocks per peer at a time, and prioritizes the least commonly
 available pieces among connected peers.
 
-Downloads support single- and multi-file torrents and do not overwrite
-existing output files. Verified pieces are kept in memory as progress state for
-the current run, but are not yet resumed after restarting Manta.
+Downloads support single- and multi-file torrents. On startup, Manta rechecks
+existing output data against the torrent's piece hashes and resumes verified
+pieces; incomplete or corrupted pieces are downloaded again. Existing output
+files must have their expected sizes. Manta refuses to resize mismatched files
+and rejects symbolic links at torrent output paths. Rechecking reads the
+existing data on every start; no separate resume metadata file is required.
 
 ## Current scope
 
 Manta currently supports `.torrent` files, BitTorrent v1, HTTP(S) trackers, and
 the TCP peer protocol. UDP trackers, magnet links, DHT, peer exchange, local
-peer discovery, µTP, webseeds, BitTorrent v2, persistent resume data, and
+peer discovery, µTP, webseeds, BitTorrent v2, fast-resume metadata, and
 multi-torrent management are not implemented.
 
 Manta is dual-licensed under MIT or Apache-2.0; see [LICENSE-MIT](LICENSE-MIT)

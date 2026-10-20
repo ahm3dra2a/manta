@@ -85,8 +85,27 @@ fn download(path: &Path, destination: &Path, requested_port: u16) -> Result<()> 
         torrent.name, torrent.total_length
     );
     let peer_id = make_peer_id();
-    let storage = storage::Storage::create(&torrent, destination)?;
-    let peer_state = server::PeerState::new(storage, torrent.piece_hashes.len());
+    let mut storage = storage::Storage::open_or_create(&torrent, destination)?;
+    let verified_pieces = storage.verify_pieces(&torrent)?;
+    let resumed_bytes = verified_pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, verified)| **verified)
+        .try_fold(0_u64, |total, (index, _)| {
+            let piece_size =
+                u64::try_from(torrent.piece_size(index)?).context("piece size is too large")?;
+            total
+                .checked_add(piece_size)
+                .context("resumed byte count overflow")
+        })?;
+    let resumed_piece_count = verified_pieces.iter().filter(|verified| **verified).count();
+    if resumed_piece_count > 0 {
+        println!(
+            "Rechecked existing data: {resumed_piece_count}/{} pieces verified.",
+            torrent.piece_hashes.len()
+        );
+    }
+    let peer_state = server::PeerState::with_progress(storage, verified_pieces);
     let server = server::PeerServer::start(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), requested_port),
         Arc::clone(&torrent),
@@ -100,7 +119,7 @@ fn download(path: &Path, destination: &Path, requested_port: u16) -> Result<()> 
     ctrlc::set_handler(move || signal_state.store(false, Ordering::Relaxed))
         .context("could not register Ctrl+C handler")?;
 
-    let downloaded_bytes = Arc::new(AtomicU64::new(0));
+    let downloaded_bytes = Arc::new(AtomicU64::new(resumed_bytes));
     let mut retry_delay = Duration::from_secs(15);
     let mut tracker_started = false;
     let mut completion_announced = false;

@@ -25,9 +25,13 @@ pub struct PeerState {
 
 impl PeerState {
     pub fn new(storage: Storage, piece_count: usize) -> Self {
+        Self::with_progress(storage, vec![false; piece_count])
+    }
+
+    pub fn with_progress(storage: Storage, downloaded: Vec<bool>) -> Self {
         Self {
             storage: Arc::new(Mutex::new(storage)),
-            downloaded: Arc::new(Mutex::new(vec![false; piece_count])),
+            downloaded: Arc::new(Mutex::new(downloaded)),
             uploaded: Arc::new(AtomicU64::new(0)),
             have_senders: Arc::new(Mutex::new(Vec::new())),
         }
@@ -351,8 +355,7 @@ mod tests {
         });
         let mut storage = Storage::create(&torrent, &destination).unwrap();
         storage.write_piece(0, torrent.piece_length, bytes).unwrap();
-        let state = PeerState::new(storage, 1);
-        state.mark_piece_available(0).unwrap();
+        let state = PeerState::with_progress(storage, vec![true]);
         let peer_id = *b"-MT0001-000000000000";
         let server = PeerServer::start(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

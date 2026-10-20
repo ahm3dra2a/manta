@@ -2,6 +2,15 @@
 
 All notable changes to Manta are documented here.
 
+## [0.3.0] - 2026-10-19
+
+### Added
+
+- Resume existing single- and multi-file output by rechecking each piece
+  against the torrent's SHA-1 hashes at startup.
+- Re-download pieces that are missing or fail verification, and refuse to
+  modify existing output files with unexpected sizes.
+
 ## [0.2.0] - 2026-10-19
 
 ### Added
@@ -13,7 +22,7 @@ All notable changes to Manta are documented here.
 
 ### Limitations
 
-- No persistent resume data, magnet links, UDP trackers, DHT, PEX, LPD, µTP,
+- No fast-resume metadata, magnet links, UDP trackers, DHT, PEX, LPD, µTP,
   webseeds, BitTorrent v2, or multi-torrent management.
 - The native Windows and Linux desktop frontends are planned, not yet
   implemented.
@@ -34,6 +43,6 @@ All notable changes to Manta are documented here.
 
 ### Limitations
 
-- No persistent resume data, magnet links, UDP trackers, DHT, PEX, LPD, µTP,
+- No verified resume, magnet links, UDP trackers, DHT, PEX, LPD, µTP,
   webseeds, BitTorrent v2, parallel block requests, or multi-torrent management.
 - Inbound connectivity depends on network and firewall configuration.

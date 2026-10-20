@@ -23,6 +23,18 @@ pub struct Torrent {
 }
 
 impl Torrent {
+    pub fn piece_size(&self, index: usize) -> Result<usize> {
+        let start = index
+            .checked_mul(self.piece_length)
+            .context("piece offset overflow")?;
+        let total_length =
+            usize::try_from(self.total_length).context("torrent is too large for this platform")?;
+        Ok(total_length
+            .checked_sub(start)
+            .context("piece index is outside the torrent")?
+            .min(self.piece_length))
+    }
+
     pub fn from_bytes(input: &[u8]) -> Result<Self> {
         if input.len() > 16 * 1024 * 1024 {
             bail!("torrent file is larger than the 16 MiB safety limit");
