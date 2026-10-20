@@ -2,6 +2,14 @@
 
 All notable changes to Manta are documented here.
 
+## [0.4.0] - 2026-10-20
+
+### Added
+
+- Limit uploads to eight unchoked peers, with fair FIFO rotation for interested
+  peers waiting for an upload slot.
+- Send choke/unchoke state changes and honor peer interest when serving blocks.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added

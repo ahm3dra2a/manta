@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -14,6 +15,7 @@ use crate::torrent::Torrent;
 const BLOCK_SIZE: usize = 16 * 1024;
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 const MAX_INBOUND_PEERS: usize = 64;
+const MAX_UNCHOKED_PEERS: usize = 8;
 
 #[derive(Clone)]
 pub struct PeerState {
@@ -21,6 +23,8 @@ pub struct PeerState {
     pub downloaded: Arc<Mutex<Vec<bool>>>,
     pub uploaded: Arc<AtomicU64>,
     have_senders: Arc<Mutex<Vec<Sender<usize>>>>,
+    upload_slots: Arc<Mutex<UploadSlotPool>>,
+    next_upload_peer: Arc<AtomicUsize>,
 }
 
 impl PeerState {
@@ -34,6 +38,8 @@ impl PeerState {
             downloaded: Arc::new(Mutex::new(downloaded)),
             uploaded: Arc::new(AtomicU64::new(0)),
             have_senders: Arc::new(Mutex::new(Vec::new())),
+            upload_slots: Arc::new(Mutex::new(UploadSlotPool::new(MAX_UNCHOKED_PEERS))),
+            next_upload_peer: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -54,6 +60,117 @@ impl PeerState {
             .map_err(|_| anyhow::anyhow!("peer notification lock was poisoned"))?;
         senders.retain(|sender| sender.send(index).is_ok());
         Ok(())
+    }
+
+    fn register_upload_peer(&self, sender: Sender<bool>) -> Result<UploadPeerGuard> {
+        let id = self.next_upload_peer.fetch_add(1, Ordering::Relaxed);
+        self.upload_slots
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload slot state was poisoned"))?
+            .register(id, sender);
+        Ok(UploadPeerGuard {
+            id,
+            slots: Arc::clone(&self.upload_slots),
+        })
+    }
+
+    fn set_upload_interest(&self, id: usize, interested: bool) -> Result<()> {
+        self.upload_slots
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload slot state was poisoned"))?
+            .set_interested(id, interested);
+        Ok(())
+    }
+}
+
+struct UploadPeer {
+    interested: bool,
+    unchoked: bool,
+    state_sender: Sender<bool>,
+}
+
+struct UploadSlotPool {
+    max_slots: usize,
+    peers: HashMap<usize, UploadPeer>,
+    waiting: VecDeque<usize>,
+}
+
+impl UploadSlotPool {
+    fn new(max_slots: usize) -> Self {
+        Self {
+            max_slots,
+            peers: HashMap::new(),
+            waiting: VecDeque::new(),
+        }
+    }
+
+    fn register(&mut self, id: usize, state_sender: Sender<bool>) {
+        self.peers.insert(
+            id,
+            UploadPeer {
+                interested: false,
+                unchoked: false,
+                state_sender,
+            },
+        );
+    }
+
+    fn set_interested(&mut self, id: usize, interested: bool) {
+        let Some(peer) = self.peers.get_mut(&id) else {
+            return;
+        };
+        if peer.interested == interested {
+            return;
+        }
+        peer.interested = interested;
+        if interested {
+            self.waiting.push_back(id);
+        } else {
+            self.waiting.retain(|waiting_id| *waiting_id != id);
+            if peer.unchoked {
+                peer.unchoked = false;
+                let _ = peer.state_sender.send(false);
+            }
+        }
+        self.assign_available_slots();
+    }
+
+    fn unregister(&mut self, id: usize) {
+        self.waiting.retain(|waiting_id| *waiting_id != id);
+        self.peers.remove(&id);
+        self.assign_available_slots();
+    }
+
+    fn assign_available_slots(&mut self) {
+        let mut active = self.peers.values().filter(|peer| peer.unchoked).count();
+        while active < self.max_slots {
+            let Some(id) = self.waiting.pop_front() else {
+                break;
+            };
+            let Some(peer) = self.peers.get_mut(&id) else {
+                continue;
+            };
+            if !peer.interested || peer.unchoked {
+                continue;
+            }
+            peer.unchoked = true;
+            let _ = peer.state_sender.send(true);
+            active += 1;
+        }
+    }
+}
+
+struct UploadPeerGuard {
+    id: usize,
+    slots: Arc<Mutex<UploadSlotPool>>,
+}
+
+impl Drop for UploadPeerGuard {
+    fn drop(&mut self) {
+        match self.slots.lock() {
+            Ok(mut slots) => slots.unregister(self.id),
+            Err(_) => eprintln!("Could not release upload slot: upload slot state was poisoned"),
+        }
     }
 }
 
@@ -191,17 +308,28 @@ fn serve_peer(
         .lock()
         .map_err(|_| anyhow::anyhow!("peer notification lock was poisoned"))?
         .push(have_sender);
+    let (upload_state_sender, upload_state_receiver) = mpsc::channel();
+    let upload_peer = state.register_upload_peer(upload_state_sender)?;
     send_bitfield(&mut stream, state)?;
+    let mut unchoked = false;
 
     while running.load(Ordering::Relaxed) {
+        send_upload_state_changes(&mut stream, &upload_state_receiver, &mut unchoked)?;
         while let Ok(index) = have_receiver.try_recv() {
             send_message(&mut stream, 4, &(index as u32).to_be_bytes())?;
         }
 
         match read_message(&mut stream) {
             Ok(None) => continue,
-            Ok(Some((2, _))) => send_message(&mut stream, 1, &[])?,
-            Ok(Some((6, payload))) => {
+            Ok(Some((2, _))) => {
+                state.set_upload_interest(upload_peer.id, true)?;
+                send_upload_state_changes(&mut stream, &upload_state_receiver, &mut unchoked)?;
+            }
+            Ok(Some((3, _))) => {
+                state.set_upload_interest(upload_peer.id, false)?;
+                send_upload_state_changes(&mut stream, &upload_state_receiver, &mut unchoked)?;
+            }
+            Ok(Some((6, payload))) if unchoked => {
                 serve_request(&mut stream, peer_address, payload, torrent, state)?;
             }
             Ok(Some(_)) => {}
@@ -211,6 +339,20 @@ fn serve_peer(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) => {}
             Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn send_upload_state_changes(
+    stream: &mut TcpStream,
+    receiver: &mpsc::Receiver<bool>,
+    unchoked: &mut bool,
+) -> Result<()> {
+    while let Ok(next_unchoked) = receiver.try_recv() {
+        if *unchoked != next_unchoked {
+            send_message(stream, if next_unchoked { 1 } else { 0 }, &[])?;
+            *unchoked = next_unchoked;
         }
     }
     Ok(())
@@ -384,12 +526,13 @@ mod tests {
         assert_eq!(read_message(&mut stream), (5, vec![0x80]));
 
         thread::sleep(Duration::from_millis(600));
-        write_message(&mut stream, 2, &[]);
-        assert_eq!(read_message(&mut stream), (1, vec![]));
         let mut request = Vec::new();
         request.extend_from_slice(&0_u32.to_be_bytes());
         request.extend_from_slice(&0_u32.to_be_bytes());
         request.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        write_message(&mut stream, 6, &request);
+        write_message(&mut stream, 2, &[]);
+        assert_eq!(read_message(&mut stream), (1, vec![]));
         write_message(&mut stream, 6, &request);
         assert_eq!(
             read_message(&mut stream),
@@ -399,6 +542,32 @@ mod tests {
         drop(stream);
         server.shutdown().unwrap();
         std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn upload_slots_are_bounded_and_waiters_are_served_fairly() {
+        let mut slots = UploadSlotPool::new(1);
+        let (first_sender, first_receiver) = mpsc::channel();
+        let (second_sender, second_receiver) = mpsc::channel();
+        let (third_sender, third_receiver) = mpsc::channel();
+        slots.register(1, first_sender);
+        slots.register(2, second_sender);
+        slots.register(3, third_sender);
+
+        slots.set_interested(1, true);
+        slots.set_interested(2, true);
+        slots.set_interested(3, true);
+        assert_eq!(first_receiver.try_recv(), Ok(true));
+        assert!(second_receiver.try_recv().is_err());
+        assert!(third_receiver.try_recv().is_err());
+
+        slots.set_interested(1, false);
+        assert_eq!(first_receiver.try_recv(), Ok(false));
+        assert_eq!(second_receiver.try_recv(), Ok(true));
+        assert!(third_receiver.try_recv().is_err());
+
+        slots.unregister(2);
+        assert_eq!(third_receiver.try_recv(), Ok(true));
     }
 
     fn write_message(stream: &mut TcpStream, id: u8, payload: &[u8]) {

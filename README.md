@@ -20,6 +20,9 @@ port. Manta announces the bound port to trackers and sends `started`,
 pieces after the download is complete until stopped with Ctrl+C. Inbound
 connections are limited to 64 peers. Public reachability depends on the host
 firewall and network allowing connections to the selected peer port.
+Manta unchokes up to eight interested peers at a time, queues additional
+interested peers fairly, and only serves piece requests while a peer is
+unchoked.
 
 During downloads, Manta connects to multiple tracker peers concurrently,
 requests multiple blocks per peer at a time, and prioritizes the least commonly
